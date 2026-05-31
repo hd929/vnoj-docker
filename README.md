@@ -1,234 +1,152 @@
 # VNOJ Docker
 
-This repository contains the Docker files to run the [VNOJ](https://github.com/VNOI-Admin/OJ).
+A Docker-based setup for [VNOJ](https://github.com/VNOI-Admin/OJ) (Vietnam Online Judge), based on [dmoj-docker](https://github.com/Ninjaclasher/dmoj-docker).
 
-Based on [dmoj-docker](https://github.com/Ninjaclasher/dmoj-docker).
+## Features
 
-## Installation
+- **Full VNOJ site** with Nginx, uWSGI, MySQL, Redis
+- **Judge server** with Themis support (C++, Pascal)
+- **20+ programming languages** supported
+- **Vietnamese/English** interface with i18n
+- **PDF problem statements** with embedded viewer
+- **Contest management** with multiple format support
 
-First, [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/) must be installed. Installation instructions can be found on their respective websites.
+## Quick Start
 
-Clone the repository:
+### Prerequisites
 
-```sh
-$ git clone --recursive https://github.com/VNOI-Admin/vnoj-docker.git
-$ cd vnoj-docker/dmoj
-```
+- Docker & Docker Compose (v2+)
+- Git
 
-From now on, it is assumed you are in the `dmoj` directory.
-
-Initialize the setup by moving the configuration files into the submodule and creating the necessary directories:
-
-```sh
-$ ./scripts/initialize
-```
-
-Next, configure the environment variables in the files in `dmoj/environment/`. Create the files from the examples:
+### Setup
 
 ```sh
-$ cp environment/mysql-admin.env.example environment/mysql-admin.env
-$ cp environment/mysql.env.example environment/mysql.env
-$ cp environment/site.env.example environment/site.env
+# Clone with submodules
+git clone --recursive https://github.com/hd929/vnoj-docker.git
+cd vnoj-docker/dmoj
+
+# Initialize config
+./scripts/initialize
+
+# Configure environment
+cp environment/mysql-admin.env.example environment/mysql-admin.env
+cp environment/mysql.env.example environment/mysql.env
+cp environment/site.env.example environment/site.env
+# Edit the .env files to set passwords and secret key
+cp ../config/local_settings.py repo/dmoj/
+
+# Build and start
+docker compose build
+docker compose up -d
+
+# Run migrations
+docker exec vnoj_site python3 manage.py migrate
+
+# Load fixtures
+docker exec vnoj_site python3 manage.py loaddata navbar
+docker exec vnoj_site python3 manage.py loaddata language_small
+docker exec vnoj_site python3 manage.py loaddata demo
+
+# Collect static files
+docker exec vnoj_site python3 manage.py collectstatic --noinput
+
+# Create admin
+docker exec vnoj_site python3 manage.py createsuperuser
 ```
 
-Then, set the MYSQL passwords in `mysql.env` and `mysql-admin.env`, and the host and secret key in `site.env`. Also, configure the `server_name` directive in `dmoj/nginx/conf.d/nginx.conf`.
+Access at **http://localhost** (admin: `/admin/`)
 
-Next, build the images:
+### Running the Judge
 
 ```sh
-$ docker compose build
+# Create judge account
+docker exec vnoj_site python3 manage.py shell -c "
+from judge.models import Judge
+Judge.objects.get_or_create(name='vnoj-judge', defaults={'auth_key': 'your_key'})
+"
+
+# Start judge container
+docker run -d --name vnoj_judge \
+  --restart unless-stopped \
+  --network dmoj_db \
+  --cap-add=SYS_PTRACE \
+  -v /path/to/problems:/problems \
+  -v /path/to/judge.yml:/judge.yml \
+  vnoj/judge-tiervnoj:latest \
+  run -c /judge.yml bridged vnoj-judge your_key
 ```
 
-Start up the site, so you can perform the initial migrations and generate the static files:
+## Architecture
 
-```sh
-$ docker compose up -d site db redis celery
+| Container | Role |
+|-----------|------|
+| `vnoj_mysql` | MariaDB 10.11 database |
+| `vnoj_redis` | Redis cache & queue |
+| `vnoj_site` | Django uWSGI application |
+| `vnoj_nginx` | Nginx reverse proxy |
+| `vnoj_bridged` | Judge bridge daemon |
+| `vnoj_celery` | Background task worker |
+| `vnoj_wsevent` | WebSocket event server |
+| `vnoj_judge` | Submission grader |
+
+## Customization
+
+### UI / Branding
+
+- **Logo**: Replace `resources/icons/logo.svg` and `resources/icons/logo.png`
+- **Favicon**: Replace `resources/favicon.ico`
+- **Theme colors**: Edit `resources/vars-default.scss` (light) and `resources/vars-dark.scss` (dark)
+- **Site name**: Set `SITE_NAME` and `SITE_LONG_NAME` in `config/local_settings.py`
+
+### Language / i18n
+
+- Translations are in `repo/locale/vi/LC_MESSAGES/django.po`
+- Compile with: `docker exec vnoj_site python3 manage.py compilemessages`
+
+### Features
+
+- **Pwned password check**: Toggle with `DMOJ_ENABLE_PWNED_PASSWORD_CHECK` in `config/local_settings.py`
+- **Password validators**: Override `AUTH_PASSWORD_VALIDATORS` in `local_settings.py` to remove checks
+
+## Adding Problems
+
+### Via Admin Interface
+
+1. Go to **http://localhost/admin/judge/problem/add/**
+2. Upload test data as ZIP or add test cases manually
+3. Set `pdf_url` to link a PDF statement (e.g., `/pdf/problems/mystatement.pdf`)
+
+### Via Script
+
+```python
+from judge.models import Problem, ProblemTestCase
+prob = Problem.objects.create(code='myprob', name='My Problem', ...)
+# Add test cases
+ProblemTestCase.objects.create(dataset=prob, order=1,
+    input_file='1.in', output_file='1.out', type='C', points=100)
 ```
 
-You will need to generate the schema for the database, since it is currently empty:
+## Contests
 
-```sh
-$ ./scripts/migrate
+Create contests through the admin interface at `/admin/judge/contest/` or via script:
+
+```python
+from judge.models import Contest, ContestProblem
+c = Contest.objects.create(key='mycontest', name='My Contest', ...)
+ContestProblem.objects.create(contest=c, problem=prob, order=1, points=100)
 ```
 
-You will also need to generate the static files:
+## Troubleshooting
 
-```sh
-$ ./scripts/copy_static
-```
+| Problem | Solution |
+|---------|----------|
+| 502 Bad Gateway | Run `docker compose restart site` |
+| PDF 404 | Check nginx config: `location /pdf/ { alias /media/; }` |
+| Judge offline | Verify `vnoj_judge` container is running and can reach `bridged:9999` |
+| Migration errors | Ensure `lxml_html_clean` is installed: `pip install lxml_html_clean` |
+| Tablespace error | Use Docker volume (not bind mount) for MySQL data |
+| Static files missing | Run `collectstatic --noinput` after changes |
 
-Finally, the VNOJ comes with fixtures so that the initial install is not blank. They can be loaded with the following commands:
+## License
 
-```sh
-$ ./scripts/manage.py loaddata navbar
-$ ./scripts/manage.py loaddata language_small
-$ ./scripts/manage.py loaddata demo
-```
-
-Keep in mind that the demo fixture creates a superuser account with a username and password of `admin`. You should change the user's password or remove the user entirely.
-
-You can also create a superuser account for yourself:
-
-```sh
-$ ./scripts/manage.py createsuperuser
-```
-
-## Usage
-
-To start everything:
-
-```sh
-$ docker compose up -d
-```
-
-To stop everything:
-
-```sh
-$ docker compose down
-```
-
-## Notes
-
-### Judge server
-
-The judge server is not included in this Docker setup. Please refer to [Setting up a Judge](https://vnoi-admin.github.io/vnoj-docs/#/judge/setting_up_a_judge).
-
-The bridge instance is included in this Docker setup and should be running once you start everything.
-
-### Migrating
-
-As the VNOJ site is a Django app, you may need to migrate whenever you update. Assuming the site container is running, running the following command should suffice:
-
-```sh
-$ ./scripts/migrate
-```
-
-### Managing Static Files
-
-If your static files ever change, you will need to rebuild them:
-
-```sh
-$ ./scripts/copy_static
-```
-
-### Updating The Site
-
-Updating various sections of the site requires different images to be rebuilt.
-
-If any prerequisites were modified, you will need to rebuild most of the images:
-
-```sh
-$ docker compose up -d --build base site celery bridged wsevent
-```
-
-If the static files are modified, read the section on [Managing Static Files](#managing-static-files).
-
-If only the source code is modified, a restart is sufficient:
-
-```sh
-$ docker compose restart site celery bridged wsevent
-```
-
-### Multiple Nginx Instances
-
-The `docker-compose.yml` configures Nginx to publish to port 80. If you have another Nginx instance on your host machine, you may want to change the port and proxy pass instead.
-
-For example, a possible Nginx configuration file on your host machine would be:
-
-```
-server {
-    listen 80;
-    listen [::]:80;
-
-    add_header X-UA-Compatible "IE=Edge,chrome=1";
-    add_header X-Content-Type-Options nosniff;
-    add_header X-XSS-Protection "1; mode=block";
-
-    location / {
-        proxy_http_version 1.1;
-        proxy_buffering off;
-        proxy_set_header Host $http_host;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        proxy_pass http://127.0.0.1:10080/;
-    }
-}
-```
-
-In this case, the port that the Nginx instance in the Docker container is published to would need to be modified to `10080`.
-
-### Load balancing
-
-By default, all services (site, bridged, wsevent, db, celery, redis, etc.) run in the same machine. However, it is not ideal for handling a large number of users. In this case, you need to distribute the services to multiple servers. A typical setup would be:
-
-- One central server for nginx, db, redis, bridged, and wsevent
-- Multiple workers, each will run nginx, site, and celery
-
-#### Central server
-
-You need to configure `dmoj/nginx/conf.d/nginx.conf` to distribute traffic to workers. Refer to [Nginx docs](https://docs.nginx.com/nginx/admin-guide/load-balancer/http-load-balancer/) for how to do it.
-
-A sample configuration:
-
-```
-upstream site {
-    ip_hash;
-    server srv1.example.com;
-    server srv2.example.com;
-    server srv3.example.com;
-}
-
-server {
-    listen 80;
-    listen [::]:80;
-
-    location / {
-        proxy_http_version 1.1;
-        proxy_buffering off;
-        proxy_set_header Host $http_host;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        proxy_pass http://site/;
-    }
-
-    location /event/ {
-        proxy_pass http://wsevent:15100/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 86400;
-    }
-
-    location /channels/ {
-        proxy_read_timeout 120;
-        proxy_pass http://wsevent:15102/;
-    }
-}
-```
-
-Uncomment `ports` blocks in `dmoj/docker-compose.yml`. You also need to open these ports for workers to connect to:
-
-- db: 3306
-- redis: 6379
-- bridged: 9998 9999
-- wsevent: 15100 15101 15102
-
-Now, let's start the services:
-
-```sh
-docker compose up -d nginx db redis bridged wsevent
-```
-
-#### Worker
-
-You need to configure `dmoj/environment/site.env` and `dmoj/environment/mysql.env` to point to the central server.
-
-```sh
-docker compose up -d nginx site celery
-```
+Based on [DMOJ](https://github.com/DMOJ/online-judge) - see original LICENSE.

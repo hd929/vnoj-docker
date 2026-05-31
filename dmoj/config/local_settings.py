@@ -126,7 +126,7 @@ STATIC_ROOT = '/assets/static/'
 STATIC_URL = '/static/'
 
 # Uncomment to use hashed filenames with the cache framework.
-STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
+#STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
 
 DMOJ_RESOURCES = '/assets/resources/'
 
@@ -327,3 +327,21 @@ LOGGING = {
 FILE_UPLOAD_PERMISSIONS = 0o644
 
 VNOJ_CP_TICKET = 5
+
+# Toggle Pwned Password check (HaveIBeenPwned API)
+# Set to False to disable checking passwords against known compromised databases.
+DMOJ_ENABLE_PWNED_PASSWORD_CHECK = False
+
+# Remove UserAttributeSimilarityValidator (password too similar to username)
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+    },
+    {
+        'NAME': 'judge.utils.pwned.PwnedPasswordsValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+]
+

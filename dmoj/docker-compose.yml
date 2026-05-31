@@ -1,11 +1,10 @@
-version: '3.7'
 services:
   db:
     container_name: vnoj_mysql
-    image: mariadb
+    image: mariadb:10.11
     restart: unless-stopped
     volumes:
-      - ./database/:/var/lib/mysql/
+      - db_data:/var/lib/mysql/
     env_file: [environment/mysql.env, environment/mysql-admin.env]
     networks: [db]
     #ports:
@@ -115,6 +114,7 @@ networks:
   db:
   nginx:
 volumes:
+  db_data:
   assets:
   userdatacache:
   contestdatacache:
